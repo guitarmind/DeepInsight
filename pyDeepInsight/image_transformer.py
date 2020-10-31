@@ -14,9 +14,12 @@ class ImageTransformer:
     CNN compatible 'image' matrix
 
     """
-
-    def __init__(self, feature_extractor='tsne', pixels=100,
-                 random_state=None, n_jobs=None):
+    def __init__(self,
+                 feature_extractor='tsne',
+                 perplexity=30,
+                 pixels=100,
+                 random_state=None,
+                 n_jobs=None):
         """Generate an ImageTransformer instance
 
         Args:
@@ -35,19 +38,28 @@ class ImageTransformer:
 
         if isinstance(feature_extractor, str):
             fe = feature_extractor.casefold()
-            if fe == 'tsne'.casefold():
-                fe = TSNE(
-                    n_components=2, metric='cosine',
-                    random_state=self.random_state,
-                    n_jobs=self.n_jobs)
+            if fe == 'tsne_exact'.casefold():
+                fe = TSNE(n_components=2,
+                          metric='cosine',
+                          perplexity=perplexity,
+                          n_iter=1000,
+                          method='exact',
+                          random_state=self.random_state,
+                          n_jobs=self.n_jobs)
+            elif fe == 'tsne'.casefold():
+                fe = TSNE(n_components=2,
+                          metric='cosine',
+                          n_iter=1000,
+                          method='barnes_hut',
+                          random_state=self.random_state,
+                          n_jobs=self.n_jobs)
             elif fe == 'pca'.casefold():
-                fe = PCA(n_components=2,
-                         random_state=self.random_state)
+                fe = PCA(n_components=2, random_state=self.random_state)
             elif fe == 'kpca'.casefold():
-                fe = KernelPCA(
-                    n_components=2, kernel='rbf',
-                    random_state=self.random_state,
-                    n_jobs=self.n_jobs)
+                fe = KernelPCA(n_components=2,
+                               kernel='rbf',
+                               random_state=self.random_state,
+                               n_jobs=self.n_jobs)
             else:
                 raise ValueError(("Feature extraction method '{}' not accepted"
                                   ).format(feature_extractor))
@@ -61,6 +73,8 @@ class ImageTransformer:
 
         if isinstance(pixels, int):
             pixels = (pixels, pixels)
+
+        # The resolution of transformed image
         self._pixels = pixels
         self._xrot = None
 
@@ -76,25 +90,40 @@ class ImageTransformer:
         Returns:
             self: object
         """
-        # perform dimensionality reduction
-        x_new = self._fe.fit_transform(X.T)
-        # get the convex hull for the points
+        # Perform dimensionality reduction
+        x_new = self._fe.fit_transform(X)
+
+        # Transpose to get (n_features, n_samples)
+        x_new = x_new.T
+
+        # Get the convex hull for the points
         chvertices = ConvexHull(x_new).vertices
         hull_points = x_new[chvertices]
-        # determine the minimum bounding rectangle
+
+        # Determine the minimum bounding rectangle
         mbr, mbr_rot = self._minimum_bounding_rectangle(hull_points)
-        # rotate the matrix
-        # save the rotated matrix in case user wants to change the pixel size
+
+        # Rotate the matrix
+        # Save the rotated matrix in case user wants to change the pixel size
         self._xrot = np.dot(mbr_rot, x_new.T).T
-        # determine feature coordinates based on pixel dimension
+
+        # Determine feature coordinates based on pixel dimension
         self._calculate_coords()
+
         # plot rotation diagram if requested
         if plot is True:
-            plt.scatter(x_new[:, 0], x_new[:, 1], s=1,
-                        cmap=plt.cm.get_cmap("jet", 10), alpha=0.2)
-            plt.fill(x_new[chvertices, 0], x_new[chvertices, 1],
-                     edgecolor='r', fill=False)
-            plt.fill(mbr[:, 0], mbr[:, 1], edgecolor='g', fill=False)
+            # Create subplots
+            fig, ax = plt.subplots(1, 1, figsize=(10, 7), squeeze=False)
+            ax[0, 0].scatter(x_new[:, 0],
+                             x_new[:, 1],
+                             cmap=plt.cm.get_cmap("jet", 10),
+                             marker="x",
+                             alpha=1.0)
+            ax[0, 0].fill(x_new[chvertices, 0],
+                          x_new[chvertices, 1],
+                          edgecolor='r',
+                          fill=False)
+            ax[0, 0].fill(mbr[:, 0], mbr[:, 1], edgecolor='g', fill=False)
             plt.gca().set_aspect('equal', adjustable='box')
             plt.show()
         return self
@@ -129,16 +158,14 @@ class ImageTransformer:
         """Calculate the matrix coordinates of each feature based on the
         pixel dimensions.
         """
-        ax0_coord = np.digitize(
-            self._xrot[:, 0],
-            bins=np.linspace(min(self._xrot[:, 0]), max(self._xrot[:, 0]),
-                             self._pixels[0])
-        ) - 1
-        ax1_coord = np.digitize(
-            self._xrot[:, 1],
-            bins=np.linspace(min(self._xrot[:, 1]), max(self._xrot[:, 1]),
-                             self._pixels[1])
-        ) - 1
+        ax0_coord = np.digitize(self._xrot[:, 0],
+                                bins=np.linspace(min(self._xrot[:, 0]),
+                                                 max(self._xrot[:, 0]),
+                                                 self._pixels[0])) - 1
+        ax1_coord = np.digitize(self._xrot[:, 1],
+                                bins=np.linspace(min(self._xrot[:, 1]),
+                                                 max(self._xrot[:, 1]),
+                                                 self._pixels[1])) - 1
         self._coords = np.stack((ax0_coord, ax1_coord))
 
     def transform(self, X, empty_value=0):
@@ -148,16 +175,19 @@ class ImageTransformer:
             X: {array-like, sparse matrix} of shape (n_samples, n_features)
                 where n_features matches the training set.
             empty_value: numeric value to fill elements where no features are
-                mapped. Default = 0.
+                mapped. Default = 0 (although it was 1 in the paper).
 
         Returns:
             A list of n_samples numpy matrices of dimensions set by
             the pixel parameter
         """
-        img_coords = pd.DataFrame(np.vstack((
-            self._coords,
-            X.clip(0, 1)
-        )).T).groupby([0, 1], as_index=False).mean()
+
+        # Group by location (x1, y1) of each feature
+        # Tranpose to get (n_features, n_samples)
+        img_coords = pd.DataFrame(
+            np.vstack((it._coords, train_gene_features.clip(0, 1))).T).groupby(
+                [0, 1],  # (x1, y1)
+                as_index=False).mean()
 
         img_matrices = []
         blank_mat = np.zeros(self._pixels)
@@ -171,19 +201,21 @@ class ImageTransformer:
 
         return img_matrices
 
-    def fit_transform(self, X):
+    def fit_transform(self, X, empty_value=0):
         """Train the image transformer from the training set (X) and return
         the transformed data.
 
         Args:
             X: {array-like, sparse matrix} of shape (n_samples, n_features)
+            empty_value: numeric value to fill elements where no features are
+                mapped. Default = 0 (although it was 1 in the paper).
 
         Returns:
             A list of n_samples numpy matrices of dimensions set by
             the pixel parameter
         """
         self.fit(X)
-        return self.transform(X)
+        return self.transform(X, empty_value=empty_value)
 
     def feature_density_matrix(self):
         """Generate image matrix with feature counts per pixel
@@ -192,10 +224,12 @@ class ImageTransformer:
             img_matrix (ndarray): matrix with feature counts per pixel
         """
         fdmat = np.zeros(self._pixels)
-        coord_cnt = (pd.DataFrame(self._coords.T)
-                       .assign(count=1)
-                       .groupby([0, 1], as_index=False)
-                       .count())
+        # Group by location (x1, y1) of each feature
+        # Tranpose to get (n_features, n_samples)
+        coord_cnt = (
+            pd.DataFrame(self._coords.T).assign(count=1).groupby(
+                [0, 1],  # (x1, y1)
+                as_index=False).count())
         fdmat[coord_cnt[0].astype(int),
               coord_cnt[1].astype(int)] = coord_cnt['count']
         return fdmat
@@ -218,35 +252,43 @@ class ImageTransformer:
         """
 
         pi2 = np.pi / 2.
-        # calculate edge angles
+
+        # Calculate edge angles
         edges = hull_points[1:] - hull_points[:-1]
         angles = np.arctan2(edges[:, 1], edges[:, 0])
         angles = np.abs(np.mod(angles, pi2))
         angles = np.unique(angles)
-        # find rotation matrices
+
+        # Find rotation matrices
         rotations = np.vstack([
             np.cos(angles),
             np.cos(angles - pi2),
             np.cos(angles + pi2),
-            np.cos(angles)]).T
+            np.cos(angles)
+        ]).T
         rotations = rotations.reshape((-1, 2, 2))
-        # apply rotations to the hull
+
+        # Apply rotations to the hull
         rot_points = np.dot(rotations, hull_points.T)
-        # find the bounding points
+
+        # Find the bounding points
         min_x = np.nanmin(rot_points[:, 0], axis=1)
         max_x = np.nanmax(rot_points[:, 0], axis=1)
         min_y = np.nanmin(rot_points[:, 1], axis=1)
         max_y = np.nanmax(rot_points[:, 1], axis=1)
-        # find the box with the best area
+
+        # Find the box with the best area
         areas = (max_x - min_x) * (max_y - min_y)
         best_idx = np.argmin(areas)
-        # return the best box
+
+        # Return the best box
         x1 = max_x[best_idx]
         x2 = min_x[best_idx]
         y1 = max_y[best_idx]
         y2 = min_y[best_idx]
         rotmat = rotations[best_idx]
-        # generate coordinates
+
+        # Generate coordinates
         coords = np.zeros((4, 2))
         coords[0] = np.dot([x1, y2], rotmat)
         coords[1] = np.dot([x2, y2], rotmat)
@@ -261,23 +303,47 @@ class LogScaler:
 
     Log normalization and scaling procedure as described as norm-2 in the
     DeepInsight paper supplementary information.
+    
+    Note: The dimensions of input matrix is (d features, N samples)
     """
-
     def __init__(self):
         self._min0 = None
         self._max = None
         pass
 
     def fit(self, X, y=None):
+        # Min. of training set per feature
         self._min0 = X.min(axis=0)
+
+        # Global max. of training set from log(X + _min0 + 1)
         self._max = np.log(X + np.abs(self._min0) + 1).max()
 
     def fit_transform(self, X, y=None):
+        # Min. of training set per feature
         self._min0 = X.min(axis=0)
-        X_norm = np.log(X + np.abs(self._min0) + 1)
+
+        # Log normalized X by log(X + _min0 + 1)
+        X_norm = np.log(
+            X +
+            np.repeat(np.abs(self._min0)[np.newaxis, :], X.shape[0], axis=0) +
+            1)
+
+        # Global max. of training set from X_norm
         self._max = X_norm.max()
+
+        # Normalized again by global max. of training set
         return X_norm / self._max
 
     def transform(self, X, y=None):
-        X_norm = np.log(X + np.abs(self._min0) + 1).clip(0, None)
+        # Adjust min. of each feature of X by _min0
+        for i in range(X.shape[1]):
+            X[:, i] = X[:, i].clip(min=self._min0[i], max=None)
+
+        # Log normalized X by log(X + _min0 + 1)
+        X_norm = np.log(
+            X +
+            np.repeat(np.abs(self._min0)[np.newaxis, :], X.shape[0], axis=0) +
+            1).clip(min=0, max=None)
+
+        # Normalized again by global max. of training set
         return (X_norm / self._max).clip(0, 1)
