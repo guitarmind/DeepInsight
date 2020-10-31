@@ -90,11 +90,11 @@ class ImageTransformer:
         Returns:
             self: object
         """
+        # Transpose to get (n_features, n_samples)
+        X = X.T
+
         # Perform dimensionality reduction
         x_new = self._fe.fit_transform(X)
-
-        # Transpose to get (n_features, n_samples)
-        x_new = x_new.T
 
         # Get the convex hull for the points
         chvertices = ConvexHull(x_new).vertices
