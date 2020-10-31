@@ -184,8 +184,8 @@ class ImageTransformer:
 
         # Group by location (x1, y1) of each feature
         # Tranpose to get (n_features, n_samples)
-        img_coords = pd.DataFrame(
-            np.vstack((self._coords, train_gene_features.clip(0, 1))).T).groupby(
+        img_coords = pd.DataFrame(np.vstack(
+            (self._coords, X.clip(0, 1))).T).groupby(
                 [0, 1],  # (x1, y1)
                 as_index=False).mean()
 
