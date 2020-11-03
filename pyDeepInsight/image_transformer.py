@@ -310,15 +310,26 @@ class LogScaler:
     def __init__(self):
         self._min0 = None
         self._max = None
-        pass
 
+    """
+    Use this as a preprocessing step in inference mode.
+    """
     def fit(self, X, y=None):
         # Min. of training set per feature
         self._min0 = X.min(axis=0)
 
-        # Global max. of training set from log(X + _min0 + 1)
-        self._max = np.log(X + np.abs(self._min0) + 1).max()
+        # Log normalized X by log(X + _min0 + 1)
+        X_norm = np.log(
+            X +
+            np.repeat(np.abs(self._min0)[np.newaxis, :], X.shape[0], axis=0) +
+            1).clip(min=0, max=None)
 
+        # Global max. of training set from X_norm
+        self._max = X_norm.max()
+
+    """
+    For training set only.
+    """
     def fit_transform(self, X, y=None):
         # Min. of training set per feature
         self._min0 = X.min(axis=0)
@@ -335,6 +346,9 @@ class LogScaler:
         # Normalized again by global max. of training set
         return (X_norm / self._max).clip(0, 1)
 
+    """
+    For validation and test set only.
+    """
     def transform(self, X, y=None):
         # Adjust min. of each feature of X by _min0
         for i in range(X.shape[1]):
