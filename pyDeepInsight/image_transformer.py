@@ -49,6 +49,7 @@ class ImageTransformer:
             elif fe == 'tsne'.casefold():
                 fe = TSNE(n_components=2,
                           metric='cosine',
+                          perplexity=perplexity,
                           n_iter=1000,
                           method='barnes_hut',
                           random_state=self.random_state,
@@ -304,7 +305,7 @@ class LogScaler:
     Log normalization and scaling procedure as described as norm-2 in the
     DeepInsight paper supplementary information.
     
-    Note: The dimensions of input matrix is (d features, N samples)
+    Note: The dimensions of input matrix is (N samples, d features)
     """
     def __init__(self):
         self._min0 = None
@@ -326,13 +327,13 @@ class LogScaler:
         X_norm = np.log(
             X +
             np.repeat(np.abs(self._min0)[np.newaxis, :], X.shape[0], axis=0) +
-            1)
+            1).clip(min=0, max=None)
 
         # Global max. of training set from X_norm
         self._max = X_norm.max()
 
         # Normalized again by global max. of training set
-        return X_norm / self._max
+        return (X_norm / self._max).clip(0, 1)
 
     def transform(self, X, y=None):
         # Adjust min. of each feature of X by _min0
